@@ -7,7 +7,7 @@ from aws_cdk import (
     aws_ecs as ecs,
     aws_efs as efs,
     aws_iam as iam,
-    aws_cloudwatch as cloudwatch,
+    aws_elasticloadbalancingv2 as elb,
     aws_autoscaling as autoscaling,
     aws_ecs_patterns as ecs_patterns,
     aws_logs as logs,
@@ -30,9 +30,11 @@ class MegamolbartStack(Stack):
         self.volume_name = "megamolbart-data-volume"
 
         self._create_vpc()
+        self._create_security_group()
         self._create_ecs_cluster()
         self._create_gpu_capacity()
         self._create_efs_volume()
+        self._create_alb()
         self._create_megamolbart_service()
 
     def _create_vpc(self):
@@ -51,7 +53,31 @@ class MegamolbartStack(Stack):
                 self,
                 "VPC",
                 vpc_name=self.node.try_get_context("existing_vpc_name"),
+            )                
+
+    def _create_security_group(self):
+        self.sg = ec2.SecurityGroup(
+            self,
+            "LoadBalancerSecurityGroup",
+            vpc=self.vpc
+        )
+        cidr = self.node.try_get_context("security_group_ip_range")
+        if cidr:
+            self.sg.add_ingress_rule(
+                ec2.Peer.ipv4(cidr),
+                ec2.Port.tcp(80),                
             )
+
+
+    def _create_alb(self):
+        self.alb = elb.ApplicationLoadBalancer(
+            self,
+            "Load-Balancer",
+            security_group=self.sg,
+            vpc=self.vpc,
+            internet_facing=True
+        )
+
 
     def _create_ecs_cluster(self):
         cluster = ecs.Cluster(
@@ -205,7 +231,9 @@ class MegamolbartStack(Stack):
             f"{self.identifier}-Megamolbart-Service",
             cluster=self.cluster,
             task_definition=task_definition,
-            desired_count=3
+            desired_count=3,
+            load_balancer=self.alb,
+            open_listener=False
         )
 
         megamolbart.target_group.configure_health_check(
