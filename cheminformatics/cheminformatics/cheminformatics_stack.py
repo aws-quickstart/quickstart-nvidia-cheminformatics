@@ -7,7 +7,7 @@ from aws_cdk import (
     aws_ecs as ecs,
     aws_efs as efs,
     aws_iam as iam,
-    aws_cloudwatch as cloudwatch,
+    aws_elasticloadbalancingv2 as elb,
     aws_autoscaling as autoscaling,
     aws_ecs_patterns as ecs_patterns,
     aws_logs as logs,
@@ -53,6 +53,28 @@ class CheminformaticsStack(Stack):
                 "VPC",
                 vpc_name=self.node.try_get_context("existing_vpc_name"),
             )
+            
+    def _create_security_group(self):
+        self.sg = ec2.SecurityGroup(
+            self,
+            "LoadBalancerSecurityGroup",
+            vpc=self.vpc
+        )
+        cidr = self.node.try_get_context("security_group_ip_range")
+        if cidr:
+            self.sg.add_ingress_rule(
+                ec2.Peer.ipv4(cidr),
+                ec2.Port.tcp(80),                
+            )
+
+    def _create_alb(self):
+        self.alb = elb.ApplicationLoadBalancer(
+            self,
+            "Load-Balancer",
+            security_group=self.sg,
+            vpc=self.vpc,
+            internet_facing=True
+        )
 
     def _create_ecs_cluster(self):
         cluster = ecs.Cluster(
@@ -354,6 +376,8 @@ class CheminformaticsStack(Stack):
             cluster=self.cluster,
             listener_port=80,
             load_balancer_name="cheminformatics-cuchem-lb",
+            load_balancer=self.alb,
+            open_listener=False,
             task_definition=task_definition,
             cloud_map_options=ecs.CloudMapOptions(
                 name="cuchem", container=container
@@ -381,8 +405,10 @@ class CheminformaticsStack(Stack):
         Function that orchestrates the deployment
         """
         self._create_vpc()
+        self._create_security_group()
         self._create_ecs_cluster()
         self._create_gpu_capacity()
         self._create_efs_volume()
+        self._create_alb()
         self._create_cuchem_service()
         self._create_megamolbart_service()
